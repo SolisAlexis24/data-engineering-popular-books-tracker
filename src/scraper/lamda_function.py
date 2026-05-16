@@ -6,10 +6,11 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import NoCredentialsError
 
+# Configurar logging para CloudWatch
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BUCKET = ""
+BUCKET = "<Your S3 bucket name here>"  # Reemplaza con el nombre de tu bucket S3
 
 def lambda_handler(event, context):
     scraper = most_read_scraper()
@@ -32,15 +33,17 @@ def lambda_handler(event, context):
         s3_bucket.upload_file(local_filename, BUCKET, remote_filename)
         logger.info("Carga exitosa")
     except FileNotFoundError:
-        logger.exception("El archivo local no fue encontrado.")
-        return {"statusCode": 500, "body": "Archivo no encontrado"}
+        raise RuntimeError(f"El archivo local no fue encontrado")
     except NoCredentialsError:
-        logger.exception("No se encontraron credenciales de AWS configuradas.")
-        return {"statusCode": 500, "body": "Sin credenciales"}
+        raise RuntimeError(f"No se encontraron credenciales de AWS configuradas")
     except Exception as e:
-        logger.exception(f"{e}")
-        return {"statusCode": 500, "body": str(e)}
+        raise RuntimeError(f"Error desconocido: {e}")
     finally:
         Path(local_filename).unlink(missing_ok=True)
 
-    return {"statusCode": 200, "body": f"Archivo subido: {remote_filename}"}
+    return {
+        "statusCode": 200, 
+        "body": f"Archivo subido: {remote_filename}",
+        "year": str(today.year),
+        "week": f"{today.isocalendar().week:02d}"
+    }
