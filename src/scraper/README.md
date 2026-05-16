@@ -16,125 +16,50 @@ This package provides a simple Goodreads scraper for collecting public informati
 - Supports retry logic for network calls.
 - Lambda-ready entrypoint for uploading a JSON file to an S3 bucket.
 
-## Installation
+## Source code
+To use this code, it is recommended to create a virtual environment with ```uv venv```, then install the required dependencies using ```uv sync```.
 
-Use `uv` to install dependencies from `pyproject.toml` and create a local editable package.
+### ```scraper.py```
+This scraper aims to extract information about books and the reviews related to them on the Goodreads platform within the "most read" section, which is updated weekly. This is for purely academic and research purposes.
+Users' personal information is completely discarded, and only the review content and the support it received are taken into account. If Goodreads changes its layout, the script may break.
 
-```bash
-cd src/scraper
-pip install -U pip
-pip install uv
-uv install
-uv develop
+Usage:
+1. Create an object of the ```most_read_scraper``` class.
+2. Run the ```scrape``` method, which saves the obtained information in the ```books_data``` attribute.
+
+### Running on AWS Lambda
+1. Create a role to be able to publish the generated layer to Lambda.
+2. Install the dependencies in the folder (no need to create it beforehand).
+```
+uv pip install \
+  "beautifulsoup4==4.14.3" \
+  "requests==2.33.0" \
+  "tqdm==4.67.3" \
+  --target layer/python/lib/python3.13/site-packages \
+  --python-version 3.13 \
+  --only-binary=:all:
 ```
 
-If you need a minimal runtime install without the editable package, install only the dependencies from the project lock:
-
-```bash
-cd src/scraper
-pip install -U pip
-pip install uv
-uv install --no-dev
+4. Create a package of the dependencies
 ```
-
-## AWS Lambda layer with uv
-
-To package dependencies into a Lambda layer instead of installing them locally, use `uv` and the repository lock file.
-
-1. Install `uv` if it is not already available:
-
-```bash
-pip install uv
+cd layer && zip -r ../layer.zip . && cd ..
 ```
-
-2. From `src/scraper`, create a layer directory and install dependencies into it:
-
-```bash
-cd src/scraper
-mkdir -p lambda-layer/python
-uv install --target ./lambda-layer/python
+5. Import the created layer to Lambda
 ```
-
-3. Create the layer archive:
-
-```bash
-cd lambda-layer
-zip -r ../scraper-layer.zip python
+aws lambda publish-layer-version \
+  --layer-name "scraper-dependencies" \
+  --zip-file fileb://layer.zip \
+  --compatible-runtimes python3.13 \
+  --compatible-architectures x86_64
 ```
-
-4. Upload `scraper-layer.zip` to AWS Lambda as a layer and attach it to your function.
-
-This keeps execution dependencies out of the local package install and allows Lambda to load the libraries from the shared layer.
-
-## Usage
-
-### Running the scraper directly
-
-Use `most_read_scraper` from `scraper.py`:
-
-```python
-from scraper import most_read_scraper
-
-scraper = most_read_scraper()
-scraper.scrape()
-print(scraper.books_data)
+6. Create a basic Lambda function with a minimum timeout of 3 minutes and 512 MB of memory.
+7. Create a package of the functions to be used in Lambda
 ```
-
-### How it works
-
-- `most_read_scraper.scrape()` retrieves the list of most-read book URLs.
-- It iterates through each book URL and scrapes book details and reviews.
-- Data is stored in `scraper.books_data` as a list of dictionaries.
-
-## AWS Lambda usage
-
-The Lambda handler is defined in `lamda_function.py`.
-
-### Expected behavior
-
-1. Instantiate `most_read_scraper`.
-2. Run `scraper.scrape()`.
-3. If no book data is collected, return HTTP 500.
-4. Save scraped output to `/tmp/{today}.json`.
-5. Upload the file to S3 at `1bronze/year={year}/week={week}/{date}.json`.
-6. Delete the temporary local file.
-
-### Required configuration
-
-- Set the `BUCKET` constant in `lamda_function.py` to your S3 bucket name.
-- Ensure AWS credentials are available in the Lambda execution environment.
-
-### Lambda handler
-
-The function exported for AWS Lambda is:
-
-```python
-def lambda_handler(event, context):
-    ...
+zip function.zip lambda_function.py scraper.py
 ```
-
-### Error handling
-
-The Lambda function handles:
-
-- missing scraped data
-- local file not found
-- missing AWS credentials
-- generic exceptions during upload
-
-## Notes and limitations
-
-- The scraper is built for Goodreads HTML structure as of this implementation. Changes to page markup may break selectors.
-- The scraper uses public pages only and does not require Goodreads API access.
-- The genre URL helper `get_books_urls_from_genre()` constructs a shelf URL but may need refinement for full genre scraping.
-
-## Dependencies
-
-- `beautifulsoup4`
-- `boto3`
-- `requests`
-- `tqdm`
-
-## License
-
-This repository does not include a license declaration. Add a license file if needed for your project.
+8. Update the code of the function already created in step 4.
+```
+aws lambda update-function-code \
+ --function-name LAMBDA_FUNC_NAME \
+ --zip-file fileb://function.zip
+```
