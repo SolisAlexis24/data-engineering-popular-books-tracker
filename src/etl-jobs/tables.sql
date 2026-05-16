@@ -16,6 +16,7 @@ CREATE TABLE repeticiones_libros (
     CONSTRAINT repeticiones_libros_id_metadata_fkey
         FOREIGN KEY (id_metadata)
         REFERENCES metadata_repeticiones (id_metadata)
+        ON DELETE CASCADE
 );
 
 -- Repeticiones de géneros (Top N por ejecución)
@@ -28,4 +29,5 @@ CREATE TABLE repeticiones_generos (
     CONSTRAINT repeticiones_generos_id_metadata_fkey
         FOREIGN KEY (id_metadata)
         REFERENCES metadata_repeticiones (id_metadata)
+        ON DELETE CASCADE
 );
