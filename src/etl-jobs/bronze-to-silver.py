@@ -10,7 +10,7 @@ from pyspark.sql.types import StringType
 from botocore.exceptions import ClientError
 from pyspark.errors import AnalysisException
 
-model_id = ''
+model_id = '<Your Bedrock model ID here>'  # Ejemplo: amazon.nova-lite-v1:0
 
 prompt = """Analiza estas reseñas ponderadas por likes y resume en menos de 30 palabras 
             el sentimiento general de los lectores hacia el libro. No des respuesta extra
@@ -109,7 +109,7 @@ spark.conf.set("spark.sql.session.timeZone", "UTC")
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-BUCKET = ""
+BUCKET = "<Your S3 bucket name here>"  # Ejemplo: s3://my-books-bucket
 input_path = f"{BUCKET}/1bronze/year={year}/week={week}/"
 output_books   = f"{BUCKET}/2silver/book_data/"
 output_weeks   = f"{BUCKET}/2silver/book_appearances/"

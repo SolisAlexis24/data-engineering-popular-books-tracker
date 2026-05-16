@@ -24,11 +24,11 @@ SEMANA_INICIO = SEMANA_ACTUAL - CONTEO_SEMANAS
 print(f"[INFO] Semanas {SEMANA_INICIO}–{SEMANA_ACTUAL} del año {ANIO_ACTUAL}")
 
 # ─── Configuración RDS ────────────────────────────────────────────────
-RDS_HOST     = ""
-RDS_PORT     = 0
-RDS_DB       = ""
-RDS_USER     = ""
-RDS_PASSWORD = ""
+RDS_HOST     = "<Your RDS endpoint here>"  # Ejemplo: books-db.abcdefg.us-east-1.rds.amazonaws.com
+RDS_PORT     = 5432  # Puerto PostgreSQL por defecto
+RDS_DB       = "<Your database name here>"  # Ejemplo: books_gold
+RDS_USER     = "<Your RDS username here>"  # Ejemplo: admin
+RDS_PASSWORD = "<Your RDS password here>"  # Reemplaza con tu contraseña
 
 # ─── 1. Leer ambas fuentes silver desde el catálogo de Glue ──────────
 df_appearances = glueContext.create_dynamic_frame.from_catalog(
