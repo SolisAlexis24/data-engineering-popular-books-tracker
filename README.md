@@ -196,6 +196,7 @@ data-engineering-popular-books-tracker/
 ├── docs/
 │   ├── architecture.jpg          # Architecture 
 |   ├── graphics.png              # Graphics example
+|   ├── Arquitectura.pdf          # Architecture doc
 |   └── stepfunctions_graph.png   # Step function
 ├── src/
 │   ├── scraper/
