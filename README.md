@@ -2,7 +2,7 @@
 
 This data engineering project leverages AWS infrastructure to track trending books and genres over time. By ingesting and analyzing data from the [Goodreads Top 50 Most Read Books weekly list](https://www.goodreads.com/book/most_read), the system delivers actionable recommendations to optimize retail inventory and identify high-demand books to stock.
 
-![Architecture Diagram](docs/architecture.jpg)
+![Architecture Diagram](img/architecture.jpg)
 
 ## Table of Contents
 
@@ -145,7 +145,7 @@ The pipeline is orchestrated using **AWS Step Functions**, which coordinates the
 
 This definition will lead to a step function like the following:
 
-![Step function](docs/stepfunctions_graph.png)
+![Step function](img/stepfunctions_graph.png)
 
    **Replace** `REGION` and `ACCOUNT_ID` with your AWS region and account ID.
 
@@ -193,31 +193,52 @@ The pipeline will now execute automatically every week, orchestrating all three 
 
 ```
 data-engineering-popular-books-tracker/
+├── deploy/
+│   └── README.md                          # Step-by-step deployment guide
 ├── docs/
-│   ├── architecture.jpg          # Architecture 
-|   ├── graphics.png              # Graphics example
-|   ├── Arquitectura.pdf          # Architecture doc
-|   └── stepfunctions_graph.png   # Step function
+│   ├── FunctionalDocumentation.md         # Functional requirements & use cases
+│   ├── TechnicalDocumentation.md          # Technical specs & component details
+│   ├── ArchitectureDocumentation.md       # Architecture decisions & data flows
+│   ├── SOW.md                             # Statement of Work
+│   ├── RFP.md                             # Request for Proposal
+│   └── Arquitectura.pdf                   # Architecture document (original PDF)
+├── iac/
+│   └── cloudformation.yaml                # CloudFormation template (full infra)
+├── img/
+│   ├── architecture.jpg                   # AWS architecture diagram
+│   ├── stepfunctions_graph.png            # Step Functions workflow
+│   └── graphic.png                        # Power BI visualization example
+├── ppt/
+│   └── ExecutivePresentation.md           # Executive presentation (convert to .pptx)
 ├── src/
 │   ├── scraper/
-│   │   ├── scraper.py            # Goodreads scraper class
-│   │   ├── lambda_function.py    # AWS Lambda handler
-│   │   ├── pyproject.toml        # Python dependencies
-│   │   ├── uv.lock               # Dependency lock file
-│   │   └── README.md             # Scraper documentation
+│   │   ├── scraper.py                     # Goodreads scraper class
+│   │   ├── lamda_function.py              # AWS Lambda handler
+│   │   ├── pyproject.toml                 # Python dependencies
+│   │   ├── uv.lock                        # Dependency lock file
+│   │   └── README.md                      # Scraper setup guide
 │   └── etl-jobs/
-│       ├── bronze-to-silver.py   # Glue job: enrichment with Bedrock
-│       ├── silver-to-gold.py     # Glue job: aggregations to RDS
-│       ├── tables.sql            # PostgreSQL schema
-│       └── README.md             # ETL jobs documentation
-└── README.md                     # This file
+│       ├── bronze-to-silver.py            # Glue job: enrichment with Bedrock
+│       ├── silver-to-gold.py              # Glue job: aggregations to RDS
+│       ├── tables.sql                     # PostgreSQL schema (Gold layer)
+│       └── README.md                      # ETL jobs setup guide
+├── tests/
+│   ├── unit/
+│   │   ├── test_scraper.py                # Unit tests for scraper module
+│   │   └── test_lambda_handler.py         # Unit tests for Lambda handler
+│   ├── integration/
+│   │   └── README.md                      # Integration test scripts (AWS required)
+│   ├── configuration/
+│   │   └── README.md                      # Infrastructure validation tests
+│   └── README.md                          # Testing guide
+└── README.md                              # This file
 ```
 
 
 ## Data visualization
 For visualizing data, gold layer records could be downloades as cvs and put into a BI tool. The following image is a graph of the most popular genres made in Power BI.
 
-![Power BI graphics](docs/graphic.png)
+![Power BI graphics](img/graphic.png)
 
 ## Security Considerations
 
