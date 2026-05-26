@@ -6,7 +6,7 @@ from awsglue.job import Job
 import psycopg2
 from datetime import date
 
-# ─── Argumentos del Job ───────────────────────────────────────────────
+# ── Job arguments ─────────────────────────────────────────────────────────
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 sc = SparkContext()
 glueContext = GlueContext(sc)
@@ -16,21 +16,21 @@ job.init(args['JOB_NAME'], args)
 
 CONTEO_SEMANAS = 5
 
-# ─── Rango de semanas ISO ─────────────────────────────────────────────
-hoy = date.today()
-SEMANA_ACTUAL = hoy.isocalendar()[1]
-ANIO_ACTUAL   = hoy.isocalendar()[0]
+# ── ISO week range ────────────────────────────────────────────────────────
+today = date.today()
+SEMANA_ACTUAL = today.isocalendar()[1]
+ANIO_ACTUAL   = today.isocalendar()[0]
 SEMANA_INICIO = SEMANA_ACTUAL - CONTEO_SEMANAS
-print(f"[INFO] Semanas {SEMANA_INICIO}–{SEMANA_ACTUAL} del año {ANIO_ACTUAL}")
+print(f"[INFO] Weeks {SEMANA_INICIO}–{SEMANA_ACTUAL} of year {ANIO_ACTUAL}")
 
-# ─── Configuración RDS ────────────────────────────────────────────────
-RDS_HOST     = "<Your RDS endpoint here>"  # Ejemplo: books-db.abcdefg.us-east-1.rds.amazonaws.com
-RDS_PORT     = 5432  # Puerto PostgreSQL por defecto
-RDS_DB       = "<Your database name here>"  # Ejemplo: books_gold
-RDS_USER     = "<Your RDS username here>"  # Ejemplo: admin
-RDS_PASSWORD = "<Your RDS password here>"  # Reemplaza con tu contraseña
+# ── RDS configuration ─────────────────────────────────────────────────────
+RDS_HOST     = "<Your RDS endpoint here>"  # Example: books-db.abcdefg.us-east-1.rds.amazonaws.com
+RDS_PORT     = 5432  # Default PostgreSQL port
+RDS_DB       = "<Your database name here>"  # Example: books_gold
+RDS_USER     = "<Your RDS username here>"  # Example: admin
+RDS_PASSWORD = "<Your RDS password here>"  # Replace with your password
 
-# ─── 1. Leer ambas fuentes silver desde el catálogo de Glue ──────────
+# ── 1. Read both Silver sources from the Glue Catalog ────────────────────
 df_appearances = glueContext.create_dynamic_frame.from_catalog(
     database="db_books",
     table_name="book_appearances"
@@ -38,14 +38,14 @@ df_appearances = glueContext.create_dynamic_frame.from_catalog(
 
 df_book_data = glueContext.create_dynamic_frame.from_catalog(
     database="db_books",
-    table_name="book_data" 
+    table_name="book_data"
 ).toDF()
 
 df_appearances.createOrReplaceTempView("book_appearances")
 df_book_data.createOrReplaceTempView("book_data")
 
-# ─── 2. Filtrar apariciones en el rango de semanas ───────────────────
-# Vista intermedia para no repetir el filtro en ambas queries
+# ── 2. Filter appearances within the week range ───────────────────────────
+# Intermediate view to avoid repeating the filter in both queries
 spark.sql(f"""
     CREATE OR REPLACE TEMP VIEW appearances_filtradas AS
     SELECT a.id
@@ -55,7 +55,7 @@ spark.sql(f"""
       AND a.year  = {ANIO_ACTUAL}
 """)
 
-# ─── 2a. Repeticiones de libros (Top 10) ─────────────────────────────
+# ── 2a. Top 10 books by appearances ──────────────────────────────────────
 df_libros = spark.sql("""
     SELECT
         bd.title     AS titulo,
@@ -76,7 +76,7 @@ df_libros = spark.sql("""
     ) bd ON af.id = bd.id
 """)
 
-# ─── 2b. Repeticiones de géneros ─────────────────────────────────────
+# ── 2b. Top 20 genres by distinct book count ─────────────────────────────
 df_generos = spark.sql("""
     SELECT
         genero,
@@ -89,18 +89,18 @@ df_generos = spark.sql("""
     LIMIT 20
 """)
 
-# ─── Validar resultados ───────────────────────────────────────────────
+# ── Validate results ──────────────────────────────────────────────────────
 filas_libros  = df_libros.collect()
 filas_generos = df_generos.collect()
 
 if not filas_libros and not filas_generos:
-    print("[WARN] Sin registros en el rango indicado. Abortando.")
+    print("[WARN] No records found in the specified range. Aborting.")
     job.commit()
     sys.exit(0)
 
-print(f"[INFO] {len(filas_libros)} libros | {len(filas_generos)} géneros encontrados.")
+print(f"[INFO] {len(filas_libros)} books | {len(filas_generos)} genres found.")
 
-# ─── 3. Insertar en RDS ───────────────────────────────────────────────
+# ── 3. Insert into RDS ────────────────────────────────────────────────────
 conn = psycopg2.connect(
     host=RDS_HOST, port=RDS_PORT,
     dbname=RDS_DB, user=RDS_USER, password=RDS_PASSWORD
@@ -108,16 +108,16 @@ conn = psycopg2.connect(
 cur = conn.cursor()
 
 try:
-    # 3a. Metadata compartida (una sola fila por ejecución)
+    # 3a. Shared execution metadata (one row per run)
     cur.execute("""
         INSERT INTO metadata_repeticiones (fecha_registro, conteo_semanas)
         VALUES (%s, %s)
         RETURNING id_metadata;
-    """, (hoy, CONTEO_SEMANAS))
+    """, (today, CONTEO_SEMANAS))
     id_metadata = cur.fetchone()[0]
-    print(f"[OK] Metadata id={id_metadata} | semanas {SEMANA_INICIO}–{SEMANA_ACTUAL}")
+    print(f"[OK] Metadata id={id_metadata} | weeks {SEMANA_INICIO}–{SEMANA_ACTUAL}")
 
-    # 3b. Repeticiones de libros
+    # 3b. Book appearances
     if filas_libros:
         datos_libros = [
             (id_metadata, fila['titulo'], fila['repeticiones'])
@@ -127,9 +127,9 @@ try:
             INSERT INTO repeticiones_libros (id_metadata, titulo, repeticiones)
             VALUES (%s, %s, %s);
         """, datos_libros)
-        print(f"[OK] {len(datos_libros)} libros insertados.")
+        print(f"[OK] {len(datos_libros)} books inserted.")
 
-    # 3c. Repeticiones de géneros
+    # 3c. Genre appearances
     if filas_generos:
         datos_generos = [
             (id_metadata, fila['genero'], fila['repeticiones'])
@@ -139,13 +139,13 @@ try:
             INSERT INTO repeticiones_generos (id_metadata, genero, repeticiones)
             VALUES (%s, %s, %s);
         """, datos_generos)
-        print(f"[OK] {len(datos_generos)} géneros insertados.")
+        print(f"[OK] {len(datos_generos)} genres inserted.")
 
     conn.commit()
 
 except Exception as e:
     conn.rollback()
-    print(f"[ERROR] Rollback ejecutado. Detalle: {e}")
+    print(f"[ERROR] Rollback executed. Detail: {e}")
     raise e
 finally:
     cur.close()

@@ -5,25 +5,25 @@ from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.context import SparkContext
-from pyspark.sql import functions as F 
+from pyspark.sql import functions as F
 from pyspark.sql.types import StringType
 from botocore.exceptions import ClientError
 from pyspark.errors import AnalysisException
 
-model_id = '<Your Bedrock model ID here>'  # Ejemplo: amazon.nova-lite-v1:0
+model_id = '<Your Bedrock model ID here>'  # Example: amazon.nova-lite-v1:0
 
-prompt = """Analiza estas reseñas ponderadas por likes y resume en menos de 30 palabras 
+prompt = """Analiza estas reseñas ponderadas por likes y resume en menos de 30 palabras
             el sentimiento general de los lectores hacia el libro. No des respuesta extra
             y no expliques la salida, solo da el resumen de las reseñas únicamente basado
             en la información a continuación en ESPAÑOL sin importar el idioma de la reseña.
             No te pases de 30 palabras y no alucines: """
 
 def sumarize_reviews(reviews) -> str:
-    """Recibe un string con las reseñas y regresa el resumen generado por IA."""
+    """Receives a string of reviews and returns an AI-generated summary."""
     response_text = "Sin reseñas"
     if not reviews:
         return response_text
-        
+
     bedrock = boto3.client(
         service_name='bedrock-runtime',
         region_name='us-east-2'
@@ -39,8 +39,8 @@ def sumarize_reviews(reviews) -> str:
             modelId = model_id,
             messages=conversation,
             inferenceConfig={
-                "maxTokens": 512, 
-                "temperature": 0.5, 
+                "maxTokens": 512,
+                "temperature": 0.5,
                 "topP": 0.9
             }
         )
@@ -53,20 +53,20 @@ def sumarize_reviews(reviews) -> str:
 
 sumarize_reviews_udf = F.udf(sumarize_reviews, StringType())
 
-prompt_description = """Dado los géneros y la descripción de un libro, genera una descripción 
-                        atractiva en español de máximo 50 palabras. No des respuesta extra, 
+prompt_description = """Dado los géneros y la descripción de un libro, genera una descripción
+                        atractiva en español de máximo 50 palabras. No des respuesta extra,
                         no expliques la salida, solo da la descripción. Información: """
 
 def generate_description(genres, description) -> str:
-    """Recibe los géneros y descripción del libro y regresa una descripción generada por IA."""
+    """Receives book genres and description, returns an AI-generated description."""
     response_text = "Sin descripción"
-    
+
     if not genres and not description:
         return response_text
-    
-    # Combina géneros y descripción en un solo string
+
+    # Combine genres and description into a single string
     input_text = f"Géneros: {genres} | Descripción: {description}"
-    
+
     bedrock = boto3.client(
         service_name='bedrock-runtime',
         region_name='us-east-2'
@@ -96,6 +96,7 @@ def generate_description(genres, description) -> str:
 generate_description_udf = F.udf(generate_description, StringType())
 
 
+# ── Job arguments ─────────────────────────────────────────────────────────
 args = getResolvedOptions(sys.argv, ['JOB_NAME' , 'year', 'week'])
 year = int(args['year'])
 week = int(args['week'])
@@ -109,7 +110,7 @@ spark.conf.set("spark.sql.session.timeZone", "UTC")
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-BUCKET = "<Your S3 bucket name here>"  # Ejemplo: s3://my-books-bucket
+BUCKET = "<Your S3 bucket name here>"  # Example: s3://my-books-bucket
 input_path = f"{BUCKET}/1bronze/year={year}/week={week}/"
 output_books   = f"{BUCKET}/2silver/book_data/"
 output_weeks   = f"{BUCKET}/2silver/book_appearances/"
@@ -133,6 +134,7 @@ df_flat = df_raw.select(
     F.lit(week).alias("week"),
 )
 
+# Skip enrichment for books already present in Silver (deduplication)
 try:
     df_existing = spark.read.parquet(output_books)
     df_new_only = df_flat.join(
@@ -143,6 +145,7 @@ try:
 except AnalysisException:
     df_new_only = df_flat
 
+# Build weighted reviews string for the LLM prompt
 df_with_text = df_flat.withColumn(
     "reviews_text",
     F.concat_ws(
@@ -159,6 +162,7 @@ df_with_text = df_flat.withColumn(
     )
 )
 
+# Enrich with AI-generated summary and description
 df_with_summary = df_with_text \
     .withColumn(
         "ai_reviews_summary",
@@ -173,14 +177,16 @@ df_with_summary = df_with_text \
     ) \
     .drop("reviews_text", "reviews", "description")
 
+# Write enriched book metadata to Silver (new books only)
 df_with_summary.select(
     "id", "title", "author", "rating", "pub_date",
     "ai_reviews_summary", "ai_description", "genres"
 ).write.mode("append").parquet(output_books)
 
+# Write weekly appearance record for all books
 df_flat.select("id", "year", "week") \
     .write \
     .mode("append") \
     .parquet(output_weeks)
-    
+
 job.commit()

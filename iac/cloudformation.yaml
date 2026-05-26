@@ -1,0 +1,638 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Popular Books Tracker — MISAMO inc.
+  Full ETL pipeline infrastructure for tracking popular books.
+  Includes S3, Lambda, Glue, Step Functions, EventBridge, and RDS PostgreSQL.
+
+# ─────────────────────────────────────────────
+# PARAMETERS
+# ─────────────────────────────────────────────
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: popular-books-tracker
+    Description: Base project name used as prefix for all AWS resources
+
+  DataLakeBucketName:
+    Type: String
+    Description: Globally unique S3 bucket name for the data lake
+
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Amazon Bedrock model ID for text generation
+
+  RDSMasterUsername:
+    Type: String
+    Default: booksadmin
+    Description: RDS database administrator username
+
+  RDSMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: RDS administrator password (min. 8 characters)
+
+  RDSInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium]
+    Description: RDS instance class
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where RDS and Glue will be deployed
+
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First private subnet for RDS (must be in a different availability zone than SubnetId2)
+
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second private subnet for RDS
+
+  LambdaLayerArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of the Lambda layer containing Python dependencies (beautifulsoup4, requests, tqdm).
+      Leave empty if the layer will be created and attached manually afterwards.
+
+  GlueScriptsBucket:
+    Type: String
+    Default: ""
+    Description: >
+      Bucket where Glue scripts are stored. Leave empty to use DataLakeBucketName.
+
+  EnableEventBridgeSchedule:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Enable automatic weekly execution via EventBridge
+
+# ─────────────────────────────────────────────
+# CONDITIONS
+# ─────────────────────────────────────────────
+Conditions:
+  HasLambdaLayer: !Not [!Equals [!Ref LambdaLayerArn, ""]]
+  UseDataLakeBucketForScripts: !Equals [!Ref GlueScriptsBucket, ""]
+  ScheduleEnabled: !Equals [!Ref EnableEventBridgeSchedule, "true"]
+
+# ─────────────────────────────────────────────
+# RESOURCES
+# ─────────────────────────────────────────────
+Resources:
+
+  # ── S3: Data Lake Bucket ──────────────────────────────────────────────
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DataLakeBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DataLakeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataLakeBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNonSecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub "arn:aws:s3:::${DataLakeBucketName}"
+              - !Sub "arn:aws:s3:::${DataLakeBucketName}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # ── IAM: Lambda Role ───────────────────────────────────────────────────
+  LambdaScraperRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-scraper-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3BronzeWrite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${DataLakeBucketName}/1bronze/*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── IAM: Glue Role ─────────────────────────────────────────────────────
+  GlueETLRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-glue-etl-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3DataLakeAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${DataLakeBucketName}"
+                  - !Sub "arn:aws:s3:::${DataLakeBucketName}/*"
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${DataLakeBucketName}/2silver/*"
+                  - !Sub "arn:aws:s3:::${DataLakeBucketName}/scripts/*"
+                  - !Sub "arn:aws:s3:::${DataLakeBucketName}/temporary/*"
+        - PolicyName: BedrockInvoke
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "*"
+        - PolicyName: GlueCatalogAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:GetPartitions
+                  - glue:BatchCreatePartition
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── IAM: Step Functions Role ───────────────────────────────────────────
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-stepfunctions-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambdaAndGlue
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt LambdaScraper.Arn
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                  - glue:BatchStopJobRun
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── IAM: EventBridge Role ──────────────────────────────────────────────
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-eventbridge-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartStepFunctions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Ref BooksPipeline
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── Lambda: Scraper Function ───────────────────────────────────────────
+  # NOTE: Function code must be deployed separately with:
+  #   aws lambda update-function-code --function-name <name> --zip-file fileb://function.zip
+  LambdaScraper:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-scraper"
+      Description: "Goodreads most-read scraper — uploads JSON to S3 Bronze layer"
+      Runtime: python3.13
+      Handler: lamda_function.lambda_handler
+      Role: !GetAtt LambdaScraperRole.Arn
+      Timeout: 180
+      MemorySize: 512
+      Layers: !If
+        - HasLambdaLayer
+        - [!Ref LambdaLayerArn]
+        - []
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref DataLakeBucketName
+      Code:
+        ZipFile: |
+          # Placeholder — replace with:
+          # aws lambda update-function-code \
+          #   --function-name <function-name> \
+          #   --zip-file fileb://function.zip
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "Placeholder — deploy real code"}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-scraper"
+      RetentionInDays: 30
+
+  # ── Glue: Catalog Database ─────────────────────────────────────────────
+  GlueDatabaseBooks:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: db_books
+        Description: "Silver layer catalog database — Popular Books Tracker"
+
+  # ── Glue: bronze-to-silver Job ─────────────────────────────────────────
+  GlueJobBronzeToSilver:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: bronze-to-silver
+      Description: "ETL: reads Bronze JSON, enriches with Bedrock, writes Silver Parquet"
+      Role: !GetAtt GlueETLRole.Arn
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub
+          - "s3://${Bucket}/scripts/bronze-to-silver.py"
+          - Bucket: !If [UseDataLakeBucketForScripts, !Ref DataLakeBucketName, !Ref GlueScriptsBucket]
+      GlueVersion: "4.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 60
+      DefaultArguments:
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--job-language": "python"
+        "--BUCKET": !Sub "s3://${DataLakeBucketName}"
+        "--model_id": !Ref BedrockModelId
+        "--TempDir": !Sub "s3://${DataLakeBucketName}/temporary/"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--enable-metrics": "true"
+      Tags:
+        Project: !Ref ProjectName
+
+  # ── Glue: silver-to-gold Job ───────────────────────────────────────────
+  GlueJobSilverToGold:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: silver-to-gold
+      Description: "ETL: aggregates Silver appearances, Top 10 books and Top 20 genres into RDS Gold"
+      Role: !GetAtt GlueETLRole.Arn
+      Command:
+        Name: glueetl
+        PythonVersion: "3"
+        ScriptLocation: !Sub
+          - "s3://${Bucket}/scripts/silver-to-gold.py"
+          - Bucket: !If [UseDataLakeBucketForScripts, !Ref DataLakeBucketName, !Ref GlueScriptsBucket]
+      GlueVersion: "4.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 30
+      DefaultArguments:
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--job-language": "python"
+        "--TempDir": !Sub "s3://${DataLakeBucketName}/temporary/"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--enable-metrics": "true"
+      Tags:
+        Project: !Ref ProjectName
+
+  # ── Glue: Silver Schema Crawler ────────────────────────────────────────
+  GlueSilverCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${ProjectName}-silver-crawler"
+      Description: "Detects Silver table schemas and updates the Glue Data Catalog"
+      Role: !GetAtt GlueETLRole.Arn
+      DatabaseName: !Ref GlueDatabaseBooks
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${DataLakeBucketName}/2silver/book_data/"
+          - Path: !Sub "s3://${DataLakeBucketName}/2silver/book_appearances/"
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      Tags:
+        Project: !Ref ProjectName
+
+  # ── RDS: Security Group ────────────────────────────────────────────────
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-rds-sg"
+      GroupDescription: "Security group for RDS PostgreSQL — access restricted to Glue only"
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Name
+          Value: !Sub "${ProjectName}-rds-sg"
+
+  GlueSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-glue-sg"
+      GroupDescription: "Security group for Glue jobs — outbound access to RDS"
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Name
+          Value: !Sub "${ProjectName}-glue-sg"
+
+  RDSIngressFromGlue:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RDSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref GlueSecurityGroup
+      Description: "Allow PostgreSQL connections from Glue jobs"
+
+  GlueEgressToRDS:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref GlueSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref RDSSecurityGroup
+      Description: "Allow PostgreSQL egress to RDS"
+
+  GlueEgressToInternet:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref GlueSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: "0.0.0.0/0"
+      Description: "Allow HTTPS egress for S3 and Bedrock (no VPC endpoint)"
+
+  # ── RDS: Subnet Group ──────────────────────────────────────────────────
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub "${ProjectName}-rds-subnet-group"
+      DBSubnetGroupDescription: "Subnet group for Books Tracker RDS PostgreSQL instance"
+      SubnetIds:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── RDS: PostgreSQL Instance ───────────────────────────────────────────
+  RDSPostgreSQL:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-db"
+      DBInstanceClass: !Ref RDSInstanceClass
+      Engine: postgres
+      EngineVersion: "13.20"
+      MasterUsername: !Ref RDSMasterUsername
+      MasterUserPassword: !Ref RDSMasterPassword
+      DBName: books_gold
+      AllocatedStorage: "20"
+      StorageType: gp2
+      MultiAZ: false
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      BackupRetentionPeriod: 7
+      DeletionProtection: false
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── Step Functions: State Machine ─────────────────────────────────────
+  BooksPipeline:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${ProjectName}-pipeline"
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      Definition:
+        StartAt: Scrap books data
+        QueryLanguage: JSONata
+        Comment: "Scrap information from goodreads and store it into S3"
+        States:
+          Scrap books data:
+            Type: Task
+            Resource: "arn:aws:states:::lambda:invoke"
+            Output: "{% $states.result.Payload %}"
+            Arguments:
+              FunctionName: !GetAtt LambdaScraper.Arn
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                  - Lambda.TooManyRequestsException
+                  - RuntimeError
+                IntervalSeconds: 30
+                MaxAttempts: 3
+                BackoffRate: 2
+                JitterStrategy: FULL
+            Next: bronze-to-silver
+          bronze-to-silver:
+            Type: Task
+            Resource: "arn:aws:states:::glue:startJobRun.sync"
+            Arguments:
+              JobName: bronze-to-silver
+              Arguments:
+                "--year": "{% $states.input.year %}"
+                "--week": "{% $states.input.week %}"
+            End: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── EventBridge: Weekly Schedule Rule ─────────────────────────────────
+  WeeklyScheduleRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleEnabled
+    Properties:
+      Name: !Sub "${ProjectName}-weekly-trigger"
+      Description: "Triggers the books pipeline every Monday at 00:00 UTC"
+      ScheduleExpression: "cron(0 0 ? * MON *)"
+      State: ENABLED
+      Targets:
+        - Id: StepFunctionsTarget
+          Arn: !Ref BooksPipeline
+          RoleArn: !GetAtt EventBridgeRole.Arn
+
+  # ── CloudWatch: Step Functions Failure Alarm ──────────────────────────
+  PipelineFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-pipeline-failed"
+      AlarmDescription: "Alerts when the books pipeline execution fails"
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref BooksPipeline
+      Statistic: Sum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+# ─────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────
+Outputs:
+
+  DataLakeBucketName:
+    Description: "S3 data lake bucket name"
+    Value: !Ref DataLakeBucket
+    Export:
+      Name: !Sub "${ProjectName}-datalake-bucket"
+
+  LambdaFunctionArn:
+    Description: "Scraper Lambda function ARN"
+    Value: !GetAtt LambdaScraper.Arn
+    Export:
+      Name: !Sub "${ProjectName}-lambda-arn"
+
+  LambdaFunctionName:
+    Description: "Scraper Lambda function name"
+    Value: !Ref LambdaScraper
+
+  GlueJobBronzeToSilverName:
+    Description: "Bronze to Silver Glue job name"
+    Value: !Ref GlueJobBronzeToSilver
+
+  GlueJobSilverToGoldName:
+    Description: "Silver to Gold Glue job name"
+    Value: !Ref GlueJobSilverToGold
+
+  RDSEndpoint:
+    Description: "RDS PostgreSQL instance endpoint"
+    Value: !GetAtt RDSPostgreSQL.Endpoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-rds-endpoint"
+
+  RDSPort:
+    Description: "RDS PostgreSQL instance port"
+    Value: !GetAtt RDSPostgreSQL.Endpoint.Port
+
+  RDSDatabase:
+    Description: "Gold layer database name"
+    Value: books_gold
+
+  StateMachineArn:
+    Description: "Step Functions state machine ARN"
+    Value: !Ref BooksPipeline
+    Export:
+      Name: !Sub "${ProjectName}-statemachine-arn"
+
+  GlueETLRoleArn:
+    Description: "Glue IAM role ARN"
+    Value: !GetAtt GlueETLRole.Arn
+
+  LambdaRoleArn:
+    Description: "Lambda IAM role ARN"
+    Value: !GetAtt LambdaScraperRole.Arn
+
+  GlueSecurityGroupId:
+    Description: "Glue security group ID (use when configuring Glue job VPC settings)"
+    Value: !Ref GlueSecurityGroup
+
+  DeployInstructions:
+    Description: "Post-deployment steps"
+    Value: !Sub |
+      1. Upload scripts: aws s3 cp src/etl-jobs/ s3://${DataLakeBucketName}/scripts/ --recursive
+      2. Update Lambda code: aws lambda update-function-code --function-name ${LambdaScraper} --zip-file fileb://function.zip
+      3. Edit RDS credentials in silver-to-gold.py with endpoint: ${RDSPostgreSQL.Endpoint.Address}
+      4. Connect to RDS and run: psql -h ${RDSPostgreSQL.Endpoint.Address} -U ${RDSMasterUsername} -d books_gold -f src/etl-jobs/tables.sql
+      5. Run silver-layer-crawler after the first Bronze->Silver run
