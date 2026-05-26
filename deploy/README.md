@@ -496,7 +496,7 @@ EB_ROLE_ARN="arn:aws:iam::<account-id>:role/EventBridgeRole"
 # Create weekly schedule rule (Monday 00:00 UTC = Sunday 18:00 GMT-6)
 aws events put-rule \
   --name weekly-books-scraper \
-  --schedule-expression "cron(0 0 ? * MON *)" \
+  --schedule-expression "cron(0 18 ? * SUN *)" \
   --state ENABLED \
   --description "Triggers the books pipeline weekly" \
   --region $REGION
