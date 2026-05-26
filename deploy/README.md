@@ -1,10 +1,37 @@
-# Deployment Guide
-## Popular Books Tracker — MISAMO inc.
+<div align="center">
 
-**Version**: 1.0  
-**Date**: 2026-05-24
+# Popular Books Tracker
 
-This guide describes the complete process for replicating the project from scratch in a new AWS account.
+### Deployment Guide
+
+**MISAMO inc.**
+
+![Version](https://img.shields.io/badge/version-1.0-blue.svg)
+![Date](https://img.shields.io/badge/date-2026--05--24-green.svg)
+![AWS](https://img.shields.io/badge/AWS-Production-orange.svg)
+![Python](https://img.shields.io/badge/python-3.13+-yellow.svg)
+
+*This guide describes the complete process for replicating the project from scratch in a new AWS account.*
+
+</div>
+
+---
+
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Steps Overview](#steps-overview)
+3. [Step 1 — Clone the Repository](#step-1-clone-the-repository)
+4. [Step 2 — Create the S3 Bucket](#step-2-create-the-s3-bucket)
+5. [Step 3 — Deploy with CloudFormation](#step-3-deploy-with-cloudformation-recommended)
+6. [Step 4 — Create Lambda Layer and Function](#step-4-create-lambda-layer-and-function)
+7. [Step 5 — Create RDS PostgreSQL](#step-5-create-rds-postgresql)
+8. [Step 6 — Create Glue Data Catalog and Jobs](#step-6-create-glue-data-catalog-and-jobs)
+9. [Step 7 — Create Step Functions State Machine](#step-7-create-step-functions-state-machine)
+10. [Step 8 — Create EventBridge Rule](#step-8-create-eventbridge-rule)
+11. [Step 9 — Verify the Deployment](#step-9-verify-the-deployment)
+12. [Final Verification Checklist](#final-verification-checklist)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -12,32 +39,60 @@ This guide describes the complete process for replicating the project from scrat
 
 ### Account and Tools
 
-- [ ] Active AWS account with administrator permissions
-- [ ] [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) installed and configured (`aws configure`)
-- [ ] [Python 3.13+](https://www.python.org/downloads/) installed locally
-- [ ] [uv](https://docs.astral.sh/uv/getting-started/installation/) installed (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- [ ] Git to clone the repository
+| | Requirement |
+|:-:|:--|
+| ☐ | Active **AWS account** with administrator permissions |
+| ☐ | [**AWS CLI v2**](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) installed and configured (`aws configure`) |
+| ☐ | [**Python 3.13+**](https://www.python.org/downloads/) installed locally |
+| ☐ | [**uv**](https://docs.astral.sh/uv/getting-started/installation/) installed (`curl -LsSf https://astral.sh/uv/install.sh \| sh`) |
+| ☐ | **Git** to clone the repository |
 
 ### Required AWS Services
 
 Verify the following services are enabled in your account in the target region (`us-east-2` recommended):
 
-- [ ] AWS Lambda
-- [ ] Amazon S3
-- [ ] AWS Glue
-- [ ] Amazon Bedrock (with **Amazon Nova Lite** model access requested)
-- [ ] Amazon RDS
-- [ ] AWS Step Functions
-- [ ] Amazon EventBridge
-- [ ] AWS IAM
-- [ ] Amazon CloudWatch
-- [ ] Amazon VPC (available by default)
+<table>
+<tr>
+<td>
 
-> **Important**: To use Amazon Bedrock, model access must be requested from the console: **Bedrock → Model access → Amazon Nova Lite → Request access**.
+- ☐ AWS Lambda
+- ☐ Amazon S3
+- ☐ AWS Glue
+- ☐ Amazon Bedrock *(with **Amazon Nova Lite** access)*
+- ☐ Amazon RDS
+
+</td>
+<td>
+
+- ☐ AWS Step Functions
+- ☐ Amazon EventBridge
+- ☐ AWS IAM
+- ☐ Amazon CloudWatch
+- ☐ Amazon VPC *(available by default)*
+
+</td>
+</tr>
+</table>
+
+> [!IMPORTANT]
+> To use Amazon Bedrock, model access must be requested from the console:
+> **Bedrock → Model access → Amazon Nova Lite → Request access**
 
 ---
 
 ## Steps Overview
+
+```mermaid
+flowchart LR
+    A[1. Clone repo] --> B[2. Create S3]
+    B --> C[3. CloudFormation]
+    C --> D[4. Lambda]
+    D --> E[5. RDS]
+    E --> F[6. Glue]
+    F --> G[7. Step Functions]
+    G --> H[8. EventBridge]
+    H --> I[9. Verify]
+```
 
 ```
 1. Clone the repository
@@ -103,9 +158,10 @@ aws cloudformation deploy \
   --region $REGION
 ```
 
+> [!NOTE]
 > See `iac/cloudformation.yaml` for the full parameter list.
-
-If you prefer manual deployment, continue with steps 4 onward.
+>
+> If you prefer manual deployment, continue with steps 4 onward.
 
 ---
 
@@ -148,7 +204,8 @@ echo "Layer ARN: $LAYER_ARN"
 
 ### 4.4 Update the scraper configuration
 
-Edit `src/scraper/lamda_function.py`, line 13:
+Edit `src/scraper/lamda_function.py`, **line 13**:
+
 ```python
 BUCKET = "misamo-books-tracker-<account-id>"  # Replace with the real bucket name
 ```
@@ -159,7 +216,8 @@ BUCKET = "misamo-books-tracker-<account-id>"  # Replace with the real bucket nam
 zip function.zip lambda_function.py scraper.py
 ```
 
-> **Note**: The file is named `lamda_function.py` (single 'b') in the repository; the handler is `lamda_function.lambda_handler`.
+> [!NOTE]
+> The file is named `lamda_function.py` (single 'b') in the repository; the handler is `lamda_function.lambda_handler`.
 
 ### 4.6 Create the Lambda function
 
@@ -181,10 +239,12 @@ aws lambda create-function \
 echo "Lambda function created"
 ```
 
-### 4.7 Create Lambda IAM role (if CloudFormation was not used)
+### 4.7 Create Lambda IAM role *(if CloudFormation was not used)*
+
+<details>
+<summary><strong>trust-policy-lambda.json</strong></summary>
 
 ```json
-// trust-policy-lambda.json
 {
   "Version": "2012-10-17",
   "Statement": [{
@@ -194,6 +254,8 @@ echo "Lambda function created"
   }]
 }
 ```
+
+</details>
 
 ```bash
 aws iam create-role \
@@ -288,13 +350,15 @@ echo "Scripts uploaded to S3"
 
 Before uploading (or after editing in the Glue console):
 
-**bronze-to-silver.py** (lines 13 and 112):
+**`bronze-to-silver.py`** *(lines 13 and 112)*:
+
 ```python
 model_id = 'amazon.nova-lite-v1:0'
 BUCKET = "s3://misamo-books-tracker-<account-id>"
 ```
 
-**silver-to-gold.py** (lines 27–31):
+**`silver-to-gold.py`** *(lines 27–31)*:
+
 ```python
 RDS_HOST     = "<rds-endpoint>.rds.amazonaws.com"
 RDS_PORT     = 5432
@@ -340,7 +404,7 @@ aws glue create-job \
   --region $REGION
 ```
 
-### 6.5 Configure Glue Crawler (for automatic Silver schema)
+### 6.5 Configure Glue Crawler *(for automatic Silver schema)*
 
 ```bash
 aws glue create-crawler \
@@ -351,6 +415,7 @@ aws glue create-crawler \
   --region $REGION
 ```
 
+> [!TIP]
 > Run the crawler manually after the first `bronze-to-silver` execution to register schemas in the catalog.
 
 ---
@@ -431,7 +496,7 @@ EB_ROLE_ARN="arn:aws:iam::<account-id>:role/EventBridgeRole"
 # Create weekly schedule rule (Monday 00:00 UTC = Sunday 18:00 GMT-6)
 aws events put-rule \
   --name weekly-books-scraper \
-  --schedule-expression "cron(0 0 ? * MON *)" \
+  --schedule-expression "cron(0 18 ? * SUN *)" \
   --state ENABLED \
   --description "Triggers the books pipeline weekly" \
   --region $REGION
@@ -484,7 +549,7 @@ aws stepfunctions describe-execution \
 aws s3 ls s3://$BUCKET_NAME/1bronze/ --recursive
 ```
 
-### 9.4 Run the Glue Crawler (to register Silver schemas)
+### 9.4 Run the Glue Crawler *(to register Silver schemas)*
 
 ```bash
 aws glue start-crawler --name silver-layer-crawler --region $REGION
@@ -527,31 +592,44 @@ psql -h $RDS_ENDPOINT -U booksadmin -d books_gold -c \
 
 ## Final Verification Checklist
 
+<table>
+<tr><td>
+
 - [ ] S3 bucket created and public access blocked
 - [ ] Lambda `books-scraper` deployed with dependencies layer
 - [ ] Lambda returns `{"statusCode": 200, "year": "...", "week": "..."}` on manual test
 - [ ] JSON file visible in `s3://{bucket}/1bronze/`
 - [ ] Glue job `bronze-to-silver` executes without errors
 - [ ] Parquet files visible in `s3://{bucket}/2silver/`
+
+</td><td>
+
 - [ ] Glue Crawler updates the catalog with `book_data` and `book_appearances` tables
 - [ ] Glue job `silver-to-gold` executes without errors
 - [ ] Data visible in RDS: `SELECT * FROM metadata_repeticiones;`
 - [ ] Step Functions State Machine runs the full pipeline end-to-end
 - [ ] EventBridge rule enabled and pointing to Step Functions
 
+</td></tr>
+</table>
+
 ---
 
 ## Troubleshooting
 
-| Issue | Likely cause | Solution |
-|-------|-------------|---------|
-| Lambda: `NoCredentialsError` | IAM role missing S3 permissions | Verify `S3BronzeWrite` policy on `LambdaScraperRole` |
-| Glue: `AccessDeniedException` Bedrock | Missing `bedrock:InvokeModel` permission | Add permission to `GlueETLRole` and verify model access in Bedrock console |
-| Glue: `AnalysisException` Silver | Crawler not yet executed | Run `silver-layer-crawler` after first Bronze→Silver execution |
-| Glue silver-to-gold: `psycopg2.OperationalError` | Glue cannot reach RDS | Verify Glue job VPC/subnet/security group; port 5432 must be open |
-| Step Functions: FAILED state | Lambda or Glue failure | Check CloudWatch Logs for the specific component |
-| EventBridge: not triggering | Rule disabled or no target | Verify rule state and that the target has a role with `states:StartExecution` |
+| Issue | Likely Cause | Solution |
+|:--|:--|:--|
+| **Lambda:** `NoCredentialsError` | IAM role missing S3 permissions | Verify `S3BronzeWrite` policy on `LambdaScraperRole` |
+| **Glue:** `AccessDeniedException` Bedrock | Missing `bedrock:InvokeModel` permission | Add permission to `GlueETLRole` and verify model access in Bedrock console |
+| **Glue:** `AnalysisException` Silver | Crawler not yet executed | Run `silver-layer-crawler` after first Bronze→Silver execution |
+| **Glue silver-to-gold:** `psycopg2.OperationalError` | Glue cannot reach RDS | Verify Glue job VPC/subnet/security group; port `5432` must be open |
+| **Step Functions:** `FAILED` state | Lambda or Glue failure | Check CloudWatch Logs for the specific component |
+| **EventBridge:** not triggering | Rule disabled or no target | Verify rule state and that the target has a role with `states:StartExecution` |
 
 ---
 
-*Document prepared by MISAMO inc. — Internal use only*
+<div align="center">
+
+*Document prepared by **MISAMO inc.** — Internal use only*
+
+</div>
